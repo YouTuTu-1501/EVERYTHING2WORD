@@ -5,9 +5,9 @@ import { FileUpload } from './components/FileUpload';
 import { ProcessingView } from './components/ProcessingView';
 import { ResultPreview } from './components/ResultPreview';
 import { ImageCropper } from './components/ImageCropper';
-import { AppStatus, ConversionResult, FileData, CroppedImage, SimilarityLevel, MathFormat } from './types';
+import { AppStatus, ConversionResult, FileData, CroppedImage, SimilarityLevel, MathFormat, DocumentType } from './types';
 import { convertDocument } from './services/geminiService';
-import { AlertTriangle, BrainCircuit, Layers, FunctionSquare, Binary, FileStack, X, Play, Trash2 } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, Layers, FunctionSquare, Binary, FileStack, X, Play, Trash2, FileText, GraduationCap, CheckCircle2 } from 'lucide-react';
 
 interface FileProcessingState {
   name: string;
@@ -25,11 +25,12 @@ const App: React.FC = () => {
   // Sử dụng runId để quản lý phiên xử lý, tránh xung đột khi hủy và chạy lại nhanh
   const activeRunId = useRef<number>(0);
   
+  const [docType, setDocType] = useState<DocumentType>('academic');
   const [includeSolutions, setIncludeSolutions] = useState<boolean>(false);
   const [generateSimilar, setGenerateSimilar] = useState<boolean>(false);
   const [similarCount, setSimilarCount] = useState<number>(1);
   const [similarityLevel, setSimilarityLevel] = useState<SimilarityLevel>('numbers');
-  const [mathFormat, setMathFormat] = useState<MathFormat>('latex');
+  const [mathFormat, setMathFormat] = useState<MathFormat>('equation'); // Mặc định là Word Equation
 
   const processAllFiles = async (files: FileData[], images: CroppedImage[]) => {
     const runId = Date.now();
@@ -57,7 +58,8 @@ const App: React.FC = () => {
           generateSimilar, 
           similarCount, 
           similarityLevel,
-          mathFormat
+          mathFormat,
+          docType
         );
 
         if (activeRunId.current !== runId) return null;
@@ -263,72 +265,127 @@ const App: React.FC = () => {
         {(status === AppStatus.IDLE || status === AppStatus.READY) && (
           <div className="w-full max-w-2xl mx-auto space-y-4">
             
+            {/* Tabs chọn loại tài liệu */}
+            <div className="bg-slate-100 p-1.5 rounded-2xl border border-slate-200 flex gap-2 shadow-inner">
+              <button
+                onClick={() => setDocType('academic')}
+                className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-3 ${
+                  docType === 'academic'
+                    ? 'bg-white text-blue-700 shadow-md border border-slate-200/80'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                }`}
+              >
+                <GraduationCap className={`w-5 h-5 ${docType === 'academic' ? 'text-blue-600' : 'text-slate-400'}`} />
+                <div className="text-left">
+                  <div className="font-bold text-sm leading-tight">Tài liệu Toán / Học thuật</div>
+                  <div className="text-[10px] text-slate-500 font-normal">Công thức, lời giải, bài tập tương tự</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setDocType('administrative')}
+                className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-3 ${
+                  docType === 'administrative'
+                    ? 'bg-white text-emerald-700 shadow-md border border-slate-200/80'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                }`}
+              >
+                <FileText className={`w-5 h-5 ${docType === 'administrative' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                <div className="text-left">
+                  <div className="font-bold text-sm leading-tight">Văn bản Hành chính</div>
+                  <div className="text-[10px] text-slate-500 font-normal">Công văn, quyết định, thể thức Word</div>
+                </div>
+              </button>
+            </div>
+
             {/* Options Panel */}
             <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm space-y-5 animate-fade-in-up">
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className={`p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${includeSolutions ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`} onClick={() => setIncludeSolutions(!includeSolutions)}>
-                    <div className="flex items-center gap-3">
-                      <BrainCircuit className={`w-5 h-5 ${includeSolutions ? 'text-blue-600' : 'text-gray-400'}`} />
-                      <div>
-                        <h4 className="font-bold text-gray-900 text-sm">Giải toán chi tiết</h4>
-                        <p className="text-[10px] text-gray-500">Lời giải từng bước bằng AI.</p>
-                      </div>
-                    </div>
-                    <div className={`h-5 w-9 rounded-full relative transition-colors ${includeSolutions ? 'bg-blue-600' : 'bg-gray-200'}`}>
-                      <span className={`absolute top-1 left-1 h-3 w-3 rounded-full bg-white transition-transform ${includeSolutions ? 'translate-x-4' : ''}`} />
-                    </div>
-                  </div>
-
-                  <div className={`p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${generateSimilar ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`} onClick={() => setGenerateSimilar(!generateSimilar)}>
-                    <div className="flex items-center gap-3">
-                      <Layers className={`w-5 h-5 ${generateSimilar ? 'text-indigo-600' : 'text-gray-400'}`} />
-                      <div>
-                        <h4 className="font-bold text-gray-900 text-sm">Bài tập tương tự</h4>
-                        <p className="text-[10px] text-gray-500">Mỗi câu gốc tạo N câu mới.</p>
-                      </div>
-                    </div>
-                    <div className={`h-5 w-9 rounded-full relative transition-colors ${generateSimilar ? 'bg-indigo-600' : 'bg-gray-200'}`}>
-                      <span className={`absolute top-1 left-1 h-3 w-3 rounded-full bg-white transition-transform ${generateSimilar ? 'translate-x-4' : ''}`} />
-                    </div>
+              {docType === 'administrative' ? (
+                /* Giao diện hướng dẫn cho Văn bản Hành chính */
+                <div className="bg-emerald-50/80 border border-emerald-200/80 p-4 rounded-xl flex items-start gap-3">
+                  <FileText className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-xs text-emerald-950 space-y-1.5">
+                    <p className="font-bold text-sm text-emerald-900">
+                      Chế độ Chuyển đổi Văn bản Hành chính (Công văn, Quyết định, Hợp đồng...)
+                    </p>
+                    <p className="text-emerald-800 leading-relaxed">
+                      • Tối ưu trích xuất 100% nội dung văn bản thuần, bảng biểu sạch và định dạng văn bản Word chuẩn.<br />
+                      • Tự động căn chỉnh thể thức văn bản hành chính Việt Nam (Quốc hiệu, Tiêu ngữ, Căn cứ pháp lý, Điều/Khoản, Nơi nhận và Nơi ký).<br />
+                      • Tự động bỏ qua các quy tắc chèn ký hiệu công thức toán phức tạp không cần thiết.
+                    </p>
                   </div>
                 </div>
-
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 block">Định dạng Công thức</label>
-                <div className="grid grid-cols-2 gap-2 bg-gray-50 p-1.5 rounded-lg border border-gray-100">
-                  <button 
-                    onClick={() => setMathFormat('latex')}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-md text-xs font-bold transition-all ${mathFormat === 'latex' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    <Binary className="w-4 h-4" />
-                    LaTeX ($...$)
-                  </button>
-                  <button 
-                    onClick={() => setMathFormat('equation')}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-md text-xs font-bold transition-all ${mathFormat === 'equation' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    <FunctionSquare className="w-4 h-4" />
-                    Word Equation
-                  </button>
-                </div>
-              </div>
-
-              {generateSimilar && (
-                <div className="pt-4 border-t border-gray-100 animate-fade-in space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-gray-600">Số bài mới cho mỗi câu gốc: {similarCount}</label>
-                      <input type="range" min="1" max="5" value={similarCount} onChange={(e) => setSimilarCount(parseInt(e.target.value))} className="w-full accent-indigo-600" />
+              ) : (
+                /* Giao diện tùy chọn cho Tài liệu Học thuật / Toán */
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className={`p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${includeSolutions ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`} onClick={() => setIncludeSolutions(!includeSolutions)}>
+                      <div className="flex items-center gap-3">
+                        <BrainCircuit className={`w-5 h-5 ${includeSolutions ? 'text-blue-600' : 'text-gray-400'}`} />
+                        <div>
+                          <h4 className="font-bold text-gray-900 text-sm">Giải toán chi tiết</h4>
+                          <p className="text-[10px] text-gray-500">Lời giải từng bước bằng AI.</p>
+                        </div>
+                      </div>
+                      <div className={`h-5 w-9 rounded-full relative transition-colors ${includeSolutions ? 'bg-blue-600' : 'bg-gray-200'}`}>
+                        <span className={`absolute top-1 left-1 h-3 w-3 rounded-full bg-white transition-transform ${includeSolutions ? 'translate-x-4' : ''}`} />
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-gray-600">Mức độ tương đồng:</label>
-                      <div className="flex bg-gray-100 p-1 rounded-md text-[10px]">
-                        <button onClick={() => setSimilarityLevel('numbers')} className={`flex-1 py-1 rounded ${similarityLevel === 'numbers' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-gray-400'}`}>Chỉ đổi số</button>
-                        <button onClick={() => setSimilarityLevel('type')} className={`flex-1 py-1 rounded ${similarityLevel === 'type' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-gray-400'}`}>Dạng bài</button>
+
+                    <div className={`p-4 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${generateSimilar ? 'bg-indigo-50 border-indigo-200 shadow-sm' : 'bg-white border-gray-100 hover:border-gray-200'}`} onClick={() => setGenerateSimilar(!generateSimilar)}>
+                      <div className="flex items-center gap-3">
+                        <Layers className={`w-5 h-5 ${generateSimilar ? 'text-indigo-600' : 'text-gray-400'}`} />
+                        <div>
+                          <h4 className="font-bold text-gray-900 text-sm">Bài tập tương tự</h4>
+                          <p className="text-[10px] text-gray-500">Mỗi câu gốc tạo N câu mới.</p>
+                        </div>
+                      </div>
+                      <div className={`h-5 w-9 rounded-full relative transition-colors ${generateSimilar ? 'bg-indigo-600' : 'bg-gray-200'}`}>
+                        <span className={`absolute top-1 left-1 h-3 w-3 rounded-full bg-white transition-transform ${generateSimilar ? 'translate-x-4' : ''}`} />
                       </div>
                     </div>
                   </div>
-                </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block">Định dạng Công thức (Mặc định: Word Equation)</label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 bg-gray-50 p-1.5 rounded-lg border border-gray-100">
+                      <button 
+                        onClick={() => setMathFormat('equation')}
+                        className={`flex items-center justify-center gap-2 py-2.5 rounded-md text-xs font-bold transition-all ${mathFormat === 'equation' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-gray-400 hover:text-gray-600'}`}
+                      >
+                        <FunctionSquare className="w-4 h-4" />
+                        Word Equation (Mặc định)
+                      </button>
+                      <button 
+                        onClick={() => setMathFormat('latex')}
+                        className={`flex items-center justify-center gap-2 py-2.5 rounded-md text-xs font-bold transition-all ${mathFormat === 'latex' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-gray-400 hover:text-gray-600'}`}
+                      >
+                        <Binary className="w-4 h-4" />
+                        LaTeX ($...$)
+                      </button>
+                    </div>
+                  </div>
+
+                  {generateSimilar && (
+                    <div className="pt-4 border-t border-gray-100 animate-fade-in space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-600">Số bài mới cho mỗi câu gốc: {similarCount}</label>
+                          <input type="range" min="1" max="5" value={similarCount} onChange={(e) => setSimilarCount(parseInt(e.target.value))} className="w-full accent-indigo-600" />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-600">Mức độ tương đồng:</label>
+                          <div className="flex bg-gray-100 p-1 rounded-md text-[10px]">
+                            <button onClick={() => setSimilarityLevel('numbers')} className={`flex-1 py-1 rounded ${similarityLevel === 'numbers' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-gray-400'}`}>Chỉ đổi số</button>
+                            <button onClick={() => setSimilarityLevel('type')} className={`flex-1 py-1 rounded ${similarityLevel === 'type' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-gray-400'}`}>Dạng bài</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { FileData, CroppedImage, SimilarityLevel, MathFormat } from "../types";
+import { FileData, CroppedImage, SimilarityLevel, MathFormat, DocumentType } from "../types";
 
 // Declare Mammoth globally as it's loaded via script tag
 declare const mammoth: any;
@@ -38,7 +38,8 @@ export const convertDocument = async (
   generateSimilar: boolean = false,
   similarCount: number = 1,
   similarityLevel: SimilarityLevel = 'numbers',
-  mathFormat: MathFormat = 'latex'
+  mathFormat: MathFormat = 'equation',
+  docType: DocumentType = 'academic'
 ): Promise<string> => {
   try {
     const modelId = "gemini-3-flash-preview";
@@ -66,7 +67,7 @@ export const convertDocument = async (
 
     // Gửi các ảnh cắt kèm metadata
     if (croppedImages.length > 0) {
-        croppedImages.forEach((img, idx) => {
+        croppedImages.forEach((img) => {
              parts.push({ 
                inlineData: { 
                  mimeType: "image/png", 
@@ -84,7 +85,7 @@ export const convertDocument = async (
          - Nếu có danh sách (7A, 7B), phải gõ tách biệt: $\{7A\}$, $\{7B\}$.
          - Tuyệt đối KHÔNG gõ dấu phẩy bên trong dấu ngoặc nhọn (Ví dụ SAI: $\{7A, 7B\}$).
          - Với điểm/mặt phẳng đơn lẻ: $\{A\}$, $\{B\}$, $(ABC)$.`
-      : `Sử dụng định dạng MathML (<math>...</math>) cho mọi công thức. Tuyệt đối không dùng LaTeX.`;
+      : `Sử dụng định dạng MathML (<math>...</math>) hoặc công thức Word Equation chuẩn cho mọi công thức. Tuyệt đối không dùng LaTeX.`;
 
     const solutionPrompt = includeSolutions ? `
       NHIỆM VỤ GIẢI TOÁN: Giải chi tiết từng câu hỏi ngay sau đề bài gốc. Sử dụng thẻ <div style="background-color: #f0f7ff; padding: 12px; margin: 8px 0; border-left: 4px solid #3b82f6;">.
@@ -96,30 +97,55 @@ export const convertDocument = async (
       Đặt các bài tương tự trong <div style="border: 1px dashed #cbd5e1; padding: 12px; margin: 8px 0; background-color: #fafafa;"> và đánh dấu rõ là "Bài tập tương tự".
     ` : "";
 
-    const prompt = `
-      Bạn là chuyên gia chuyển đổi tài liệu học thuật.
-      
-      YÊU CẦU VỀ NỘI DUNG:
-      1. GIỮ NGUYÊN TOÀN BỘ nội dung của tài liệu gốc.
-      2. KHÔNG được cắt xén, tóm tắt hay bỏ sót bất kỳ câu hỏi, đề bài hay lời giải nào có sẵn trong tài liệu.
-      3. Chuyển đổi trung thực 100% văn bản từ tài liệu sang định dạng HTML.
+    let prompt = "";
 
-      YÊU CẦU QUAN TRỌNG VỀ VỊ TRÍ HÌNH ẢNH:
-      1. Bạn đã nhận được một tài liệu gốc và ${croppedImages.length} ảnh cắt nhỏ.
-      2. Các ảnh cắt nhỏ này nằm ĐÂU ĐÓ trong văn bản gốc. Hãy nhìn vào nội dung ảnh cắt và tìm đoạn văn tương ứng trong tài liệu gốc.
-      3. Chèn thẻ [[IMAGE_X]] (với X là số thứ tự ảnh 1, 2, 3...) vào CHÍNH XÁC vị trí mà ảnh đó xuất hiện so với văn bản xung quanh. 
-      4. KHÔNG liệt kê tất cả ảnh ở cuối tài liệu. Phải đặt chúng xen kẽ vào đúng ngữ cảnh.
+    if (docType === 'administrative') {
+      prompt = `
+        Bạn là chuyên gia số hóa và chuyển đổi VĂN BẢN HÀNH CHÍNH (Công văn, Quyết định, Thông tư, Nghị định, Hợp đồng, Tờ trình, Báo cáo, Quy chế...).
 
-      ĐỊNH DẠNG TOÁN HỌC:
-      ${mathInstructions}
+        YÊU CẦU VỀ NỘI DUNG VÀ THỂ THỨC:
+        1. GIỮ NGUYÊN TOÀN BỘ NỘI DUNG: Không tóm tắt, không cắt xén, chuyển đổi trung thực 100% từng từ, từng dòng từ tài liệu gốc.
+        2. TRÌNH BÀY CHUẨN THỂ THỨC VĂN BẢN HÀNH CHÍNH VIỆT NAM:
+           - Quốc hiệu ("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"), Tiêu ngữ ("Độc lập - Tự do - Hạnh phúc").
+           - Tên cơ quan, tổ chức ban hành, Số/Ký hiệu văn bản, Địa danh & Ngày tháng năm.
+           - Tên loại văn bản và Trích yếu nội dung (Căn giữa, in hoa, in đậm phù hợp).
+           - Căn cứ pháp lý, căn cứ ban hành (in nghiêng, ngắt dòng chuẩn).
+           - Cấu trúc Điều, Khoản, Điểm (Điều 1., 1., a)...) giữ chuẩn thụt lề, in đậm nhãn tiêu đề.
+           - Phần Nơi nhận (thụt lề trái, cỡ chữ nhỏ/in nghiêng) và Chức vụ/Chữ ký người ký (ở phía bên phải).
+        3. BẢNG BIỂU: Tái tạo bằng <table> HTML sạch, kẻ viền đầy đủ, chuẩn cấu trúc cột và hàng.
+        4. KHÔNG tự ý chèn các ký hiệu toán học hay công thức toán học không có trong bản gốc.
 
-      ${solutionPrompt}
-      ${similarPrompt}
+        YÊU CẦU VỀ HÌNH ẢNH (NẾU CÓ):
+        ${croppedImages.length > 0 ? `Chèn các thẻ [[IMAGE_1]], [[IMAGE_2]]... vào đúng vị trí tương ứng trong văn bản.` : 'Không có ảnh cắt.'}
 
-      BẢNG BIỂU: Tái tạo bằng <table> sạch.
-      HÌNH ẢNH: Chèn thẻ [[IMAGE_X]] vào vị trí logic.
-      OUTPUT: Trả về HTML bên trong <body>. Không dùng markdown code blocks.
-    `;
+        OUTPUT: Trả về duy nhất mã HTML nằm trong <body>. Không dùng markdown code blocks (\`\`\`html).
+      `;
+    } else {
+      prompt = `
+        Bạn là chuyên gia chuyển đổi tài liệu học thuật.
+        
+        YÊU CẦU VỀ NỘI DUNG:
+        1. GIỮ NGUYÊN TOÀN BỘ nội dung của tài liệu gốc.
+        2. KHÔNG được cắt xén, tóm tắt hay bỏ sót bất kỳ câu hỏi, đề bài hay lời giải nào có sẵn trong tài liệu.
+        3. Chuyển đổi trung thực 100% văn bản từ tài liệu sang định dạng HTML.
+
+        YÊU CẦU QUAN TRỌNG VỀ VỊ TRÍ HÌNH ẢNH:
+        1. Bạn đã nhận được một tài liệu gốc và ${croppedImages.length} ảnh cắt nhỏ.
+        2. Các ảnh cắt nhỏ này nằm ĐÂU ĐÓ trong văn bản gốc. Hãy nhìn vào nội dung ảnh cắt và tìm đoạn văn tương ứng trong tài liệu gốc.
+        3. Chèn thẻ [[IMAGE_X]] (với X là số thứ tự ảnh 1, 2, 3...) vào CHÍNH XÁC vị trí mà ảnh đó xuất hiện so với văn bản xung quanh. 
+        4. KHÔNG liệt kê tất cả ảnh ở cuối tài liệu. Phải đặt chúng xen kẽ vào đúng ngữ cảnh.
+
+        ĐỊNH DẠNG TOÁN HỌC:
+        ${mathInstructions}
+
+        ${solutionPrompt}
+        ${similarPrompt}
+
+        BẢNG BIỂU: Tái tạo bằng <table> sạch.
+        HÌNH ẢNH: Chèn thẻ [[IMAGE_X]] vào vị trí logic.
+        OUTPUT: Trả về HTML bên trong <body>. Không dùng markdown code blocks.
+      `;
+    }
 
     parts.push({ text: prompt });
 

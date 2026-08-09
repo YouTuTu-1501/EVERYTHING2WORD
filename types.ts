@@ -29,3 +29,4 @@ export interface CroppedImage {
 
 export type SimilarityLevel = 'numbers' | 'type';
 export type MathFormat = 'latex' | 'equation';
+export type DocumentType = 'academic' | 'administrative';
