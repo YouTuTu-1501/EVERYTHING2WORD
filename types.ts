@@ -1,4 +1,10 @@
 
+export interface FileProcessingState {
+  name: string;
+  status: 'waiting' | 'processing' | 'complete' | 'error';
+  errorDetails?: string;
+}
+
 export enum AppStatus {
   IDLE = 'IDLE',
   READY = 'READY', // New status: Files selected, options adjustable, waiting for start

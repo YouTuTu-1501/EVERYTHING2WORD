@@ -70,6 +70,32 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
     onFileSelect(files);
   };
 
+  const handleClipboardPaste = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        const files: File[] = [];
+        for (const item of items) {
+          const imgType = item.types.find(t => t.startsWith('image/'));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            files.push(new File([blob], `pasted-${Date.now()}.png`, { type: imgType }));
+          }
+        }
+        if (files.length > 0) {
+          const dt = new DataTransfer();
+          files.forEach(f => dt.items.add(f));
+          validateAndProcessFiles(dt.files);
+          return;
+        }
+      }
+      alert("Hãy nhấn tổ hợp phím Ctrl+V (hoặc Cmd+V) trên bàn phím để dán ảnh trực tiếp.");
+    } catch {
+      alert("Hãy nhấn tổ hợp phím Ctrl+V (hoặc Cmd+V) trên bàn phím để dán ảnh trực tiếp.");
+    }
+  };
+
   return (
     <div className="w-full max-w-2xl mx-auto">
       <div
@@ -78,7 +104,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={`
-          relative border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-300
+          relative border-2 border-dashed rounded-2xl p-8 sm:p-10 text-center cursor-pointer transition-all duration-300
           ${disabled ? 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-200' : ''}
           ${isDragging 
             ? 'border-blue-500 bg-blue-50 scale-[1.02]' 
@@ -104,17 +130,23 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, disabled }
             <h3 className="text-xl font-semibold text-gray-700">
               {isDragging ? 'Thả các tệp vào đây' : 'Tải lên hoặc kéo thả nhiều tệp'}
             </h3>
-            <p className="text-sm text-gray-500">Hỗ trợ PDF, DOCX, RTF hoặc <b>Dán nhiều ảnh (Ctrl+V)</b></p>
+            <p className="text-sm text-gray-500">
+              Hỗ trợ PDF, DOCX, RTF hoặc <b className="text-blue-600">Dán liên tiếp nhiều ảnh (Ctrl+V)</b>
+            </p>
           </div>
           
-          <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg border border-blue-100">
-                <ClipboardPaste className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-wide">Bulk Paste Support</span>
-              </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleClipboardPaste}
+                className="flex items-center gap-2 px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg border border-blue-200 transition-all shadow-sm active:scale-95 text-xs font-bold"
+              >
+                <ClipboardPaste className="w-4 h-4 text-blue-600" />
+                <span>Dán từ Clipboard (Ctrl+V)</span>
+              </button>
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-100 text-xs text-gray-500">
                 <FileType className="w-4 h-4 text-gray-400" />
-                <span className="text-xs text-gray-400 uppercase tracking-wide">Parallel AI Processing</span>
+                <span className="uppercase tracking-wide text-[10px] font-bold">Song song nhiều tệp</span>
               </div>
           </div>
         </div>

@@ -5,14 +5,11 @@ import { FileUpload } from './components/FileUpload';
 import { ProcessingView } from './components/ProcessingView';
 import { ResultPreview } from './components/ResultPreview';
 import { ImageCropper } from './components/ImageCropper';
-import { AppStatus, ConversionResult, FileData, CroppedImage, SimilarityLevel, MathFormat, DocumentType } from './types';
+import { AppStatus, ConversionResult, FileData, CroppedImage, SimilarityLevel, MathFormat, DocumentType, FileProcessingState } from './types';
 import { convertDocument } from './services/geminiService';
-import { AlertTriangle, BrainCircuit, Layers, FunctionSquare, Binary, FileStack, X, Play, Trash2, FileText, GraduationCap, CheckCircle2 } from 'lucide-react';
-
-interface FileProcessingState {
-  name: string;
-  status: 'waiting' | 'processing' | 'complete' | 'error';
-}
+import { enhanceImageBase64 } from './utils/imagePreprocessor';
+import { autoAlignGovDocument } from './utils/adminDocAutoAligner';
+import { AlertTriangle, BrainCircuit, Layers, FunctionSquare, Binary, FileStack, X, Play, Trash2, FileText, GraduationCap, CheckCircle2, ClipboardPaste, Plus, ArrowUp, ArrowDown, ArrowUpDown, BookmarkX, Wand2 } from 'lucide-react';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<AppStatus>(AppStatus.IDLE);
@@ -31,13 +28,18 @@ const App: React.FC = () => {
   const [similarCount, setSimilarCount] = useState<number>(1);
   const [similarityLevel, setSimilarityLevel] = useState<SimilarityLevel>('numbers');
   const [mathFormat, setMathFormat] = useState<MathFormat>('equation'); // Mặc định là Word Equation
+  const [ignorePageNumbers, setIgnorePageNumbers] = useState<boolean>(true); // Mặc định tự động bỏ qua đánh số trang
+  const [enableImageEnhancement, setEnableImageEnhancement] = useState<boolean>(true); // Tự động tiền xử lý tăng độ tương phản & làm rõ nét chữ OCR
 
   const processAllFiles = async (files: FileData[], images: CroppedImage[]) => {
     const runId = Date.now();
     activeRunId.current = runId;
     
     setResults([]);
-    setFileProgress(files.map(f => ({ name: f.name, status: 'waiting' })));
+    const initialProgress: FileProcessingState[] = files.map(f => ({ name: f.name, status: 'waiting' }));
+    setFileProgress(initialProgress);
+
+    const fileErrors: { [key: number]: string } = {};
 
     const conversionPromises = files.map(async (file, index) => {
       // Chỉ cập nhật trạng thái nếu phiên chạy này vẫn còn hiệu lực
@@ -45,39 +47,112 @@ const App: React.FC = () => {
 
       setFileProgress(prev => {
         const next = [...prev];
-        if (next[index]) next[index].status = 'processing';
+        if (next[index]) next[index] = { ...next[index], status: 'processing', errorDetails: undefined };
         return next;
       });
 
       try {
+        // 1. Kiểm tra kích thước tệp (Giới hạn 20MB)
+        const MAX_SIZE_MB = 20;
+        if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+          throw new Error(`Tệp quá nặng (kích thước > ${MAX_SIZE_MB}MB)`);
+        }
+
+        // 2. Kiểm tra định dạng tệp hỗ trợ
+        const ext = file.name.split('.').pop()?.toLowerCase() || '';
+        const supportedExts = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'docx', 'txt'];
+        const isSupported = file.type.startsWith('image/') || 
+                            file.type === 'application/pdf' || 
+                            file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                            supportedExts.includes(ext);
+
+        if (!isSupported) {
+          throw new Error(`Lỗi định dạng: .${ext || 'không xác định'} không được hỗ trợ`);
+        }
+
+        // 3. Kiểm tra dữ liệu base64 hợp lệ
+        if (!file.base64 || file.base64.length < 50) {
+          throw new Error('Tệp rỗng hoặc không thể đọc dữ liệu');
+        }
+
+        // 4. Tiền xử lý hình ảnh (Tăng độ tương phản, chuyển xám/đen trắng, làm nét) nếu được bật
+        let fileToProcess = file;
+        if (enableImageEnhancement && file.type.startsWith('image/')) {
+          try {
+            const enhancedBase64 = await enhanceImageBase64(file.base64, {
+              enableEnhancement: true,
+              contrast: 35,
+              brightness: 10,
+              grayscale: true,
+              sharpen: true,
+            });
+            fileToProcess = { ...file, base64: enhancedBase64 };
+          } catch (e) {
+            console.warn('Lỗi tiền xử lý ảnh, dùng ảnh gốc:', e);
+          }
+        }
+
+        let imagesToProcess = images;
+        if (enableImageEnhancement && images.length > 0) {
+          imagesToProcess = await Promise.all(
+            images.map(async (img) => {
+              try {
+                const enhanced = await enhanceImageBase64(img.base64, {
+                  enableEnhancement: true,
+                  contrast: 30,
+                  brightness: 10,
+                  sharpen: true,
+                });
+                return { ...img, base64: enhanced };
+              } catch {
+                return img;
+              }
+            })
+          );
+        }
+
         const htmlContent = await convertDocument(
-          file, 
-          // Gửi toàn bộ ảnh đã cắt cho từng file, AI sẽ tự tìm ảnh phù hợp với nội dung
-          images, 
+          fileToProcess, 
+          imagesToProcess, 
           includeSolutions, 
           generateSimilar, 
           similarCount, 
           similarityLevel,
           mathFormat,
-          docType
+          docType,
+          ignorePageNumbers
         );
+
+        let finalContent = htmlContent;
+        if (docType === 'administrative') {
+          finalContent = autoAlignGovDocument(finalContent);
+        }
 
         if (activeRunId.current !== runId) return null;
 
         setFileProgress(prev => {
           const next = [...prev];
-          if (next[index]) next[index].status = 'complete';
+          if (next[index]) next[index] = { ...next[index], status: 'complete' };
           return next;
         });
 
-        return { content: htmlContent, fileName: file.name };
-      } catch (error) {
+        return { index, content: finalContent, fileName: file.name };
+      } catch (error: any) {
         if (activeRunId.current !== runId) return null;
 
+        const errMessage = error?.message || 'Lỗi không xác định khi chuyển đổi';
+        fileErrors[index] = errMessage;
         console.error(`Error processing ${file.name}:`, error);
+
         setFileProgress(prev => {
           const next = [...prev];
-          if (next[index]) next[index].status = 'error';
+          if (next[index]) {
+            next[index] = { 
+              ...next[index], 
+              status: 'error', 
+              errorDetails: errMessage 
+            };
+          }
           return next;
         });
         return null;
@@ -88,20 +163,81 @@ const App: React.FC = () => {
     
     if (activeRunId.current !== runId) return;
 
-    const successfulResults = finalResults.filter((r): r is ConversionResult => r !== null);
+    // Sắp xếp lại danh sách kết quả tuyệt đối theo đúng thứ tự mảng files người dùng đã chọn
+    const successfulResults = finalResults
+      .filter((r): r is { index: number; content: string; fileName: string } => r !== null)
+      .sort((a, b) => a.index - b.index)
+      .map(({ content, fileName }) => ({ content, fileName }));
     
     if (successfulResults.length === 0) {
       setStatus(AppStatus.ERROR);
-      setErrorMessage("Không thể chuyển đổi bất kỳ tệp nào. Vui lòng kiểm tra lại tệp đầu vào.");
+      const summaryList = files.map((f, i) => `• ${f.name}: ${fileErrors[i] || 'Lỗi xử lý'}`).join('\n');
+      setErrorMessage(`Không thể chuyển đổi bất kỳ tệp nào. Chi tiết lỗi từng tệp:\n\n${summaryList}`);
     } else {
       setResults(successfulResults);
       setStatus(AppStatus.COMPLETE);
     }
   };
 
+  const handlePasteImages = useCallback(async (imageBlobs: File[]) => {
+    if (imageBlobs.length === 0) return;
+
+    const newFilesPromises = imageBlobs.map((blob, idx) => 
+      new Promise<FileData>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          resolve({
+            name: `pasted-image-${Date.now()}-${idx + 1}.png`,
+            size: blob.size,
+            type: blob.type || 'image/png',
+            base64: e.target?.result as string
+          });
+        };
+        reader.readAsDataURL(blob);
+      })
+    );
+
+    const newFiles = await Promise.all(newFilesPromises);
+
+    setCurrentFiles(prev => [...prev, ...newFiles]);
+    if (status === AppStatus.IDLE) {
+      setStatus(AppStatus.READY);
+    } else if (status === AppStatus.CROP_SELECT) {
+      // Nếu đang trong giao diện cắt ảnh, dán trực tiếp vào giỏ ảnh đã cắt
+      const newCrops: CroppedImage[] = newFiles.map((file, idx) => ({
+        id: `pasted-${Date.now()}-${idx}`,
+        base64: file.base64,
+        page: 0
+      }));
+      setCroppedImages(prev => [...prev, ...newCrops]);
+    }
+  }, [status]);
+
+  const handleClipboardButtonClick = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        const imageBlobs: File[] = [];
+        for (const item of items) {
+          const imgType = item.types.find(t => t.startsWith('image/'));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            imageBlobs.push(new File([blob], `pasted-${Date.now()}.png`, { type: imgType }));
+          }
+        }
+        if (imageBlobs.length > 0) {
+          handlePasteImages(imageBlobs);
+          return;
+        }
+      }
+      alert("Hãy nhấn tổ hợp phím Ctrl+V (hoặc Cmd+V) để dán ảnh trực tiếp từ bộ nhớ tạm.");
+    } catch {
+      alert("Hãy nhấn tổ hợp phím Ctrl+V (hoặc Cmd+V) để dán ảnh trực tiếp từ bộ nhớ tạm.");
+    }
+  };
+
   const handleFileSelect = useCallback((files: FileList) => {
     setErrorMessage(null);
-    setCroppedImages([]);
     const fileArray = Array.from(files);
     
     const loadFiles = async () => {
@@ -121,8 +257,8 @@ const App: React.FC = () => {
       });
 
       const loadedFiles = await Promise.all(fileDataPromises);
-      setCurrentFiles(loadedFiles);
-      setStatus(AppStatus.READY); // Chuyển sang trạng thái READY
+      setCurrentFiles(prev => [...prev, ...loadedFiles]);
+      setStatus(AppStatus.READY);
     };
 
     loadFiles();
@@ -141,62 +277,14 @@ const App: React.FC = () => {
         }
       }
 
-      if (imageBlobs.length === 0) return;
-
-      const blobToCrop = (blob: File, index: number): Promise<CroppedImage> => {
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            resolve({
-              id: `pasted-${Date.now()}-${index}`,
-              base64: e.target?.result as string,
-              page: 0
-            });
-          };
-          reader.readAsDataURL(blob);
-        });
-      };
-
-      if (status === AppStatus.IDLE) {
-        const firstBlob = imageBlobs[0];
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          const base64 = e.target?.result as string;
-          const fileData: FileData = {
-            name: `pasted-images-${Date.now()}.png`,
-            size: firstBlob.size,
-            type: firstBlob.type,
-            base64: base64
-          };
-          setCurrentFiles([fileData]);
-          
-          const newCrops = await Promise.all(imageBlobs.map((blob, idx) => blobToCrop(blob, idx)));
-          setCroppedImages(newCrops);
-          setStatus(AppStatus.CROP_SELECT);
-        };
-        reader.readAsDataURL(firstBlob);
-      } else if (status === AppStatus.CROP_SELECT) {
-        const newCrops = await Promise.all(imageBlobs.map((blob, idx) => blobToCrop(blob, idx)));
-        setCroppedImages(prev => [...prev, ...newCrops]);
-      } else if (status === AppStatus.READY) {
-          const newFilesPromises = imageBlobs.map(blob => new Promise<FileData>((resolve) => {
-             const reader = new FileReader();
-             reader.onload = (e) => resolve({
-                 name: `pasted-${Date.now()}.png`,
-                 size: blob.size,
-                 type: blob.type,
-                 base64: e.target?.result as string
-             });
-             reader.readAsDataURL(blob);
-          }));
-          const newFiles = await Promise.all(newFilesPromises);
-          setCurrentFiles(prev => [...prev, ...newFiles]);
+      if (imageBlobs.length > 0) {
+        handlePasteImages(imageBlobs);
       }
     };
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [status]);
+  }, [handlePasteImages]);
 
   const handleStartProcessing = () => {
       const hasCroppable = currentFiles.some(f => f.type === 'application/pdf' || f.type.startsWith('image/'));
@@ -226,6 +314,34 @@ const App: React.FC = () => {
       }
   };
 
+  const handleMoveFileUp = (index: number) => {
+    if (index <= 0) return;
+    setCurrentFiles(prev => {
+      const next = [...prev];
+      const temp = next[index];
+      next[index] = next[index - 1];
+      next[index - 1] = temp;
+      return next;
+    });
+  };
+
+  const handleMoveFileDown = (index: number) => {
+    if (index >= currentFiles.length - 1) return;
+    setCurrentFiles(prev => {
+      const next = [...prev];
+      const temp = next[index];
+      next[index] = next[index + 1];
+      next[index + 1] = temp;
+      return next;
+    });
+  };
+
+  const handleSortByName = () => {
+    setCurrentFiles(prev => [...prev].slice().sort((a, b) => 
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    ));
+  };
+
   const handleCropComplete = (images: CroppedImage[]) => {
     setCroppedImages(images);
     if (currentFiles.length > 0) {
@@ -235,10 +351,8 @@ const App: React.FC = () => {
   };
 
   const handleCropCancel = () => {
-      if (currentFiles.length > 0) {
-          setStatus(AppStatus.PROCESSING);
-          processAllFiles(currentFiles, []);
-      }
+      // Hủy quá trình cắt ảnh: Quay lại màn hình chọn tệp sẵn sàng (READY) để chỉnh sửa
+      setStatus(currentFiles.length > 0 ? AppStatus.READY : AppStatus.IDLE);
   };
 
   const handleCancelProcess = () => {
@@ -299,7 +413,50 @@ const App: React.FC = () => {
             </div>
 
             {/* Options Panel */}
-            <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm space-y-5 animate-fade-in-up">
+            <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm space-y-4 animate-fade-in-up">
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* Tùy chọn tiền xử lý nâng cao chất lượng ảnh OCR */}
+                <div 
+                  className={`p-3.5 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${enableImageEnhancement ? 'bg-indigo-50/90 border-indigo-200 shadow-2xs' : 'bg-white border-gray-100 hover:border-gray-200'}`} 
+                  onClick={() => setEnableImageEnhancement(!enableImageEnhancement)}
+                >
+                  <div className="flex items-center gap-3">
+                    <Wand2 className={`w-5 h-5 shrink-0 ${enableImageEnhancement ? 'text-indigo-600' : 'text-gray-400'}`} />
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-gray-900 text-xs sm:text-sm">Tiền xử lý ảnh OCR nâng cao</h4>
+                        <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded-full">Tăng tương phản & Làm nét</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-0.5">Tự động cân chỉnh độ sáng, tăng độ tương phản và lọc nhiễu các ảnh mờ, scan kém chất lượng trước khi nhận diện.</p>
+                    </div>
+                  </div>
+                  <div className={`h-5 w-9 rounded-full relative transition-colors shrink-0 ml-2 ${enableImageEnhancement ? 'bg-indigo-600' : 'bg-gray-200'}`}>
+                    <span className={`absolute top-1 left-1 h-3 w-3 rounded-full bg-white transition-transform ${enableImageEnhancement ? 'translate-x-4' : ''}`} />
+                  </div>
+                </div>
+
+                {/* Tùy chọn bỏ qua số trang chung cho cả 2 loại tài liệu */}
+                <div 
+                  className={`p-3.5 rounded-xl border-2 transition-all flex items-center justify-between cursor-pointer ${ignorePageNumbers ? 'bg-amber-50/90 border-amber-200 shadow-2xs' : 'bg-white border-gray-100 hover:border-gray-200'}`} 
+                  onClick={() => setIgnorePageNumbers(!ignorePageNumbers)}
+                >
+                  <div className="flex items-center gap-3">
+                    <BookmarkX className={`w-5 h-5 shrink-0 ${ignorePageNumbers ? 'text-amber-600' : 'text-gray-400'}`} />
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-gray-900 text-xs sm:text-sm">Bỏ qua đánh số trang</h4>
+                        <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-full">Bỏ Header / Footer</span>
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-0.5">Lọc bỏ chỉ số trang (Trang 1, Page 2, - 3 -...) để liền mạch văn bản khi gộp nhiều trang thành 1 file Word.</p>
+                    </div>
+                  </div>
+                  <div className={`h-5 w-9 rounded-full relative transition-colors shrink-0 ml-2 ${ignorePageNumbers ? 'bg-amber-600' : 'bg-gray-200'}`}>
+                    <span className={`absolute top-1 left-1 h-3 w-3 rounded-full bg-white transition-transform ${ignorePageNumbers ? 'translate-x-4' : ''}`} />
+                  </div>
+                </div>
+              </div>
+
               {docType === 'administrative' ? (
                 /* Giao diện hướng dẫn cho Văn bản Hành chính */
                 <div className="bg-emerald-50/80 border border-emerald-200/80 p-4 rounded-xl flex items-start gap-3">
@@ -396,31 +553,100 @@ const App: React.FC = () => {
             {status === AppStatus.READY && (
                 <div className="animate-fade-in space-y-4">
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                        <div className="p-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                        <div className="p-4 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2">
                                 <FileStack className="w-5 h-5 text-blue-600" />
                                 <span className="font-bold text-gray-700 text-sm">Tệp đã chọn ({currentFiles.length})</span>
+                                <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-semibold">Thứ tự gộp Word</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {currentFiles.length > 1 && (
+                                    <button 
+                                        onClick={handleSortByName}
+                                        className="px-2.5 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs"
+                                        title="Sắp xếp tự động theo tên A-Z"
+                                    >
+                                        <ArrowUpDown className="w-3.5 h-3.5 text-slate-600" />
+                                        <span>Sắp xếp A-Z</span>
+                                    </button>
+                                )}
+                                <button 
+                                    onClick={handleClipboardButtonClick}
+                                    className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors flex items-center gap-1.5"
+                                    title="Dán thêm ảnh từ Clipboard (Ctrl+V)"
+                                >
+                                    <ClipboardPaste className="w-3.5 h-3.5" />
+                                    <span>Dán ảnh (Ctrl+V)</span>
+                                </button>
+                                <button 
+                                    onClick={() => document.getElementById('add-more-files-input')?.click()}
+                                    className="px-3 py-1.5 text-xs font-bold text-gray-700 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+                                >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>Thêm tệp</span>
+                                </button>
+                                <input 
+                                    id="add-more-files-input" 
+                                    type="file" 
+                                    accept=".pdf,.docx,.txt,.rtf,image/*" 
+                                    multiple 
+                                    className="hidden" 
+                                    onChange={(e) => e.target.files && handleFileSelect(e.target.files)} 
+                                />
                             </div>
                         </div>
-                        <div className="max-h-60 overflow-y-auto p-2 space-y-2 custom-scrollbar">
+                        {currentFiles.length > 1 && (
+                            <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex items-center justify-between text-xs text-blue-800">
+                                <div className="flex items-center gap-2">
+                                    <FileStack className="w-4 h-4 text-blue-600 shrink-0" />
+                                    <span>Tự động gộp <b>{currentFiles.length} tệp</b> theo đúng thứ tự (1 ➔ {currentFiles.length}) bên dưới thành <b>1 file Word duy nhất</b>. Bấm nút mũi tên <b>↑ ↓</b> để điều chỉnh thứ tự gộp.</span>
+                                </div>
+                            </div>
+                        )}
+                        <div className="max-h-64 overflow-y-auto p-2 space-y-2 custom-scrollbar">
                             {currentFiles.map((file, idx) => (
-                                <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100 group">
+                                <div key={idx} className="flex items-center justify-between p-2.5 bg-gray-50 hover:bg-white rounded-lg border border-gray-200 transition-all shadow-2xs group">
                                     <div className="flex items-center gap-3 overflow-hidden">
-                                        <div className="w-8 h-8 rounded bg-white border border-gray-200 flex items-center justify-center flex-shrink-0">
+                                        <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-800 text-xs font-black flex items-center justify-center shrink-0 border border-blue-200">
+                                            {idx + 1}
+                                        </span>
+                                        <div className="w-8 h-8 rounded bg-white border border-gray-200 flex items-center justify-center flex-shrink-0 overflow-hidden">
                                             {file.type.startsWith('image/') ? (
-                                                <img src={file.base64} className="w-full h-full object-cover rounded" />
+                                                <img src={file.base64} className="w-full h-full object-cover rounded" alt={file.name} />
                                             ) : (
                                                 <span className="text-[10px] font-bold text-gray-500">{file.name.split('.').pop()?.toUpperCase()}</span>
                                             )}
                                         </div>
-                                        <span className="text-sm text-gray-600 truncate">{file.name}</span>
+                                        <div className="truncate">
+                                            <div className="text-xs font-bold text-gray-800 truncate">{file.name}</div>
+                                            <div className="text-[10px] text-gray-400">{(file.size / 1024).toFixed(1)} KB</div>
+                                        </div>
                                     </div>
-                                    <button 
-                                        onClick={() => handleRemoveFile(idx)}
-                                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors"
-                                    >
-                                        <X className="w-4 h-4" />
-                                    </button>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                        <button 
+                                            onClick={() => handleMoveFileUp(idx)}
+                                            disabled={idx === 0}
+                                            className={`p-1.5 rounded-md transition-colors ${idx === 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-200'}`}
+                                            title="Di chuyển lên (Gộp trước)"
+                                        >
+                                            <ArrowUp className="w-4 h-4" />
+                                        </button>
+                                        <button 
+                                            onClick={() => handleMoveFileDown(idx)}
+                                            disabled={idx === currentFiles.length - 1}
+                                            className={`p-1.5 rounded-md transition-colors ${idx === currentFiles.length - 1 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-transparent hover:border-blue-200'}`}
+                                            title="Di chuyển xuống (Gộp sau)"
+                                        >
+                                            <ArrowDown className="w-4 h-4" />
+                                        </button>
+                                        <button 
+                                            onClick={() => handleRemoveFile(idx)}
+                                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors ml-1"
+                                            title="Xóa tệp khỏi danh sách"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
                                 </div>
                             ))}
                         </div>

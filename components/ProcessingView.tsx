@@ -1,14 +1,10 @@
 
 import React from 'react';
 import { Loader2, CheckCircle2, FileText, XCircle, Clock, Ban } from 'lucide-react';
-
-interface FileProgress {
-  name: string;
-  status: 'waiting' | 'processing' | 'complete' | 'error';
-}
+import { FileProcessingState } from '../types';
 
 interface ProcessingViewProps {
-  files: FileProgress[];
+  files: FileProcessingState[];
   isComplete: boolean;
   onCancel?: () => void;
 }
@@ -53,12 +49,19 @@ export const ProcessingView: React.FC<ProcessingViewProps> = ({ files, isComplet
 
         <div className="w-full max-w-md space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
           {files.map((file, idx) => (
-            <div key={idx} className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50 rounded-xl border border-gray-100">
-              <div className="flex items-center gap-3 overflow-hidden">
-                <div className="bg-white p-2 rounded-lg border border-gray-200 shadow-sm flex-shrink-0">
-                  <FileText className={`w-4 h-4 ${file.status === 'error' ? 'text-red-500' : 'text-blue-500'}`} />
+            <div key={idx} className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl border ${file.status === 'error' ? 'bg-red-50/60 border-red-200' : 'bg-gray-50 border-gray-100'}`}>
+              <div className="flex items-center gap-3 overflow-hidden text-left min-w-0">
+                <div className={`p-2 rounded-lg border shadow-sm flex-shrink-0 ${file.status === 'error' ? 'bg-red-100 border-red-200' : 'bg-white border-gray-200'}`}>
+                  <FileText className={`w-4 h-4 ${file.status === 'error' ? 'text-red-600' : 'text-blue-500'}`} />
                 </div>
-                <p className="text-xs font-medium text-gray-700 truncate text-left">{file.name}</p>
+                <div className="overflow-hidden min-w-0">
+                  <p className="text-xs font-medium text-gray-800 truncate">{file.name}</p>
+                  {file.status === 'error' && file.errorDetails && (
+                    <p className="text-[11px] text-red-600 font-normal leading-tight mt-0.5" title={file.errorDetails}>
+                      {file.errorDetails}
+                    </p>
+                  )}
+                </div>
               </div>
               <div className="flex-shrink-0">
                 {file.status === 'processing' && <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />}

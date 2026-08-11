@@ -1,12 +1,21 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { FileData, CroppedImage, SimilarityLevel, MathFormat, DocumentType } from "../types";
+import { stripCssAndMetadata } from "../utils/htmlCleaner";
 
 // Declare Mammoth globally as it's loaded via script tag
 declare const mammoth: any;
 
-// Initialize Gemini client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Initialize Gemini client with proper API key fallback and header
+const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
+const ai = new GoogleGenAI({ 
+  apiKey: apiKey,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 
 const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
   const binaryString = window.atob(base64);
@@ -39,23 +48,29 @@ export const convertDocument = async (
   similarCount: number = 1,
   similarityLevel: SimilarityLevel = 'numbers',
   mathFormat: MathFormat = 'equation',
-  docType: DocumentType = 'academic'
+  docType: DocumentType = 'academic',
+  ignorePageNumbers: boolean = true
 ): Promise<string> => {
   try {
-    const modelId = "gemini-3-flash-preview";
+    const modelId = "gemini-3.6-flash";
     const base64Content = fileData.base64.split(',')[1] || fileData.base64;
 
     let parts: any[] = [];
     let processingInstruction = "";
 
+    const isPdf = fileData.type === "application/pdf" || fileData.name.toLowerCase().endsWith(".pdf");
+    const isImage = fileData.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(fileData.name);
+    const isDocx = fileData.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || fileData.name.toLowerCase().endsWith(".docx");
+
     // Gửi tài liệu gốc trước
-    if (fileData.type === "application/pdf") {
+    if (isPdf) {
       parts.push({ inlineData: { mimeType: "application/pdf", data: base64Content } });
       processingInstruction = "Đây là tài liệu gốc (PDF).";
-    } else if (fileData.type.startsWith("image/")) {
-      parts.push({ inlineData: { mimeType: fileData.type, data: base64Content } });
+    } else if (isImage) {
+      const mime = fileData.type.startsWith("image/") ? fileData.type : "image/jpeg";
+      parts.push({ inlineData: { mimeType: mime, data: base64Content } });
       processingInstruction = "Đây là hình ảnh gốc.";
-    } else if (fileData.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    } else if (isDocx) {
       const arrayBuffer = base64ToArrayBuffer(base64Content);
       const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
       parts.push({ text: result.value });
@@ -97,43 +112,49 @@ export const convertDocument = async (
       Đặt các bài tương tự trong <div style="border: 1px dashed #cbd5e1; padding: 12px; margin: 8px 0; background-color: #fafafa;"> và đánh dấu rõ là "Bài tập tương tự".
     ` : "";
 
+    const pageNumberPrompt = ignorePageNumbers ? `
+      QUY TẮC NHẬN BIẾT VÀ BỎ QUA SỐ TRANG (PAGE NUMBERS / HEADER / FOOTER):
+      - Tự động nhận diện và BỎ QUA TẤT CẢ các thông tin đánh số trang, chỉ số trang in ở lề trên/lề dưới/góc trang tài liệu hoặc ảnh (ví dụ: "Trang 1", "Trang 1/5", "Page 2", "- 3 -", "Trang 12", "12/50", "― 4 ―", "P. 5", hoặc các con số chỉ số trang nằm đơn lẻ ở đầu hoặc cuối trang).
+      - KHÔNG trích xuất hoặc ghi các số trang này vào nội dung HTML đầu ra để đảm bảo văn bản liền mạch khi gộp nhiều trang/file.
+    ` : "";
+
     let prompt = "";
+
+    const systemInstruction = docType === 'administrative'
+      ? "Bạn là hệ thống số hóa văn bản hành chính (Công văn, Quyết định, Thông tư, Tờ trình, Báo cáo...). Nhiệm vụ của bạn là nhận diện thị giác OCR và định dạng lại tài liệu do người dùng cung cấp thành mã HTML chuẩn thể thức văn bản hành chính."
+      : "Bạn là hệ thống chuyển đổi thị giác OCR và định dạng HTML hỗ trợ số hóa tài liệu học tập. Nhiệm vụ của bạn là đọc và tái tạo cấu trúc trình bày, bài tập, bảng biểu, công thức toán từ tệp do người dùng cung cấp thành mã HTML.";
 
     if (docType === 'administrative') {
       prompt = `
-        Bạn là chuyên gia số hóa và chuyển đổi VĂN BẢN HÀNH CHÍNH (Công văn, Quyết định, Thông tư, Nghị định, Hợp đồng, Tờ trình, Báo cáo, Quy chế...).
-
-        YÊU CẦU VỀ NỘI DUNG VÀ THỂ THỨC:
-        1. GIỮ NGUYÊN TOÀN BỘ NỘI DUNG: Không tóm tắt, không cắt xén, chuyển đổi trung thực 100% từng từ, từng dòng từ tài liệu gốc.
-        2. TRÌNH BÀY CHUẨN THỂ THỨC VĂN BẢN HÀNH CHÍNH VIỆT NAM:
+        Nhiệm vụ: Chuyển đổi tài liệu hành chính do người dùng cung cấp sang mã HTML.
+        
+        YÊU CẦU TRÌNH BÀY:
+        1. Đọc và tái tạo đầy đủ thông tin tài liệu bao gồm tên cơ quan, số ký hiệu, trích yếu, các Điều, Khoản, Nơi nhận và người ký.
+        2. Trình bày chuẩn thể thức văn bản hành chính Việt Nam:
            - Quốc hiệu ("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"), Tiêu ngữ ("Độc lập - Tự do - Hạnh phúc").
-           - Tên cơ quan, tổ chức ban hành, Số/Ký hiệu văn bản, Địa danh & Ngày tháng năm.
-           - Tên loại văn bản và Trích yếu nội dung (Căn giữa, in hoa, in đậm phù hợp).
+           - Tên cơ quan ban hành, Số/Ký hiệu văn bản, Địa danh & Ngày tháng năm.
            - Căn cứ pháp lý, căn cứ ban hành (in nghiêng, ngắt dòng chuẩn).
-           - Cấu trúc Điều, Khoản, Điểm (Điều 1., 1., a)...) giữ chuẩn thụt lề, in đậm nhãn tiêu đề.
-           - Phần Nơi nhận (thụt lề trái, cỡ chữ nhỏ/in nghiêng) và Chức vụ/Chữ ký người ký (ở phía bên phải).
-        3. BẢNG BIỂU: Tái tạo bằng <table> HTML sạch, kẻ viền đầy đủ, chuẩn cấu trúc cột và hàng.
-        4. KHÔNG tự ý chèn các ký hiệu toán học hay công thức toán học không có trong bản gốc.
+           - Cấu trúc Điều, Khoản, Điểm (Điều 1., 1., a)...).
+           - Phần Nơi nhận và Chức vụ/Chữ ký người ký.
+        3. BẢNG BIỂU: Tái tạo bằng <table> HTML sạch, kẻ viền đầy đủ.
+        
+        ${pageNumberPrompt}
+        ${croppedImages.length > 0 ? `Chèn các thẻ [[IMAGE_1]], [[IMAGE_2]]... vào vị trí tương ứng trong văn bản.` : ''}
 
-        YÊU CẦU VỀ HÌNH ẢNH (NẾU CÓ):
-        ${croppedImages.length > 0 ? `Chèn các thẻ [[IMAGE_1]], [[IMAGE_2]]... vào đúng vị trí tương ứng trong văn bản.` : 'Không có ảnh cắt.'}
-
-        OUTPUT: Trả về duy nhất mã HTML nằm trong <body>. Không dùng markdown code blocks (\`\`\`html).
+        OUTPUT: Trả về duy nhất mã HTML nằm trong <body>. KHÔNG chèn thẻ <style>, KHÔNG viết các khối mã CSS (như .doc-container { ... }, .doc-p { ... }). Không dùng markdown code blocks (\`\`\`html).
       `;
     } else {
       prompt = `
-        Bạn là chuyên gia chuyển đổi tài liệu học thuật.
+        Nhiệm vụ: Chuyển đổi tài liệu học thuật do người dùng cung cấp sang mã HTML.
         
-        YÊU CẦU VỀ NỘI DUNG:
-        1. GIỮ NGUYÊN TOÀN BỘ nội dung của tài liệu gốc.
-        2. KHÔNG được cắt xén, tóm tắt hay bỏ sót bất kỳ câu hỏi, đề bài hay lời giải nào có sẵn trong tài liệu.
-        3. Chuyển đổi trung thực 100% văn bản từ tài liệu sang định dạng HTML.
+        YÊU CẦU NỘI DUNG:
+        1. Đọc tất cả các câu hỏi, bài tập, đề bài, hình vẽ, bảng biểu <table> và công thức toán học.
+        2. Tái tạo đầy đủ cấu trúc các câu hỏi, các lựa chọn A, B, C, D và lời giải có sẵn.
+        
+        ${pageNumberPrompt}
 
         YÊU CẦU QUAN TRỌNG VỀ VỊ TRÍ HÌNH ẢNH:
-        1. Bạn đã nhận được một tài liệu gốc và ${croppedImages.length} ảnh cắt nhỏ.
-        2. Các ảnh cắt nhỏ này nằm ĐÂU ĐÓ trong văn bản gốc. Hãy nhìn vào nội dung ảnh cắt và tìm đoạn văn tương ứng trong tài liệu gốc.
-        3. Chèn thẻ [[IMAGE_X]] (với X là số thứ tự ảnh 1, 2, 3...) vào CHÍNH XÁC vị trí mà ảnh đó xuất hiện so với văn bản xung quanh. 
-        4. KHÔNG liệt kê tất cả ảnh ở cuối tài liệu. Phải đặt chúng xen kẽ vào đúng ngữ cảnh.
+        ${croppedImages.length > 0 ? `Chèn thẻ [[IMAGE_X]] (với X là số thứ tự ảnh 1, 2, 3...) vào CHÍNH XÁC vị trí mà ảnh xuất hiện trong văn bản.` : 'Không có ảnh cắt kèm theo.'}
 
         ĐỊNH DẠNG TOÁN HỌC:
         ${mathInstructions}
@@ -142,20 +163,77 @@ export const convertDocument = async (
         ${similarPrompt}
 
         BẢNG BIỂU: Tái tạo bằng <table> sạch.
-        HÌNH ẢNH: Chèn thẻ [[IMAGE_X]] vào vị trí logic.
-        OUTPUT: Trả về HTML bên trong <body>. Không dùng markdown code blocks.
+        OUTPUT: Trả về duy nhất mã HTML bên trong <body>. KHÔNG chèn thẻ <style>, KHÔNG viết các khối mã CSS (.doc-container, .bold...). Không dùng markdown code blocks.
       `;
     }
 
-    parts.push({ text: prompt });
+    const runCall = async (pParts: any[], sysInst: string) => {
+      return await ai.models.generateContent({
+        model: modelId,
+        contents: { parts: pParts },
+        config: {
+          systemInstruction: sysInst,
+        }
+      });
+    };
 
-    const response = await ai.models.generateContent({
-      model: modelId,
-      contents: { parts: parts }
-    });
+    let response: any = null;
+    let text = "";
+    let finishReason = "";
 
-    let text = response.text || "";
-    let cleanHtml = text.replace(/```html/g, '').replace(/```/g, '').trim();
+    try {
+      response = await runCall([...parts, { text: prompt }], systemInstruction);
+      
+      const candidate = response.candidates?.[0];
+      finishReason = candidate?.finishReason || "";
+
+      try {
+        text = response.text || "";
+      } catch (e) {
+        text = "";
+      }
+
+      if (!text && candidate?.content?.parts) {
+        text = candidate.content.parts.map((p: any) => p.text || "").join("");
+      }
+    } catch (e: any) {
+      console.warn("First API call attempt error:", e);
+    }
+
+    let cleanHtml = stripCssAndMetadata(text);
+
+    // Fallback if RECITATION or empty response
+    if (!cleanHtml || finishReason === 'RECITATION' || finishReason === 'SAFETY') {
+      console.warn(`Initial call resulted in empty text or finishReason: ${finishReason}. Executing OCR fallback...`);
+      
+      const fallbackSystemInstruction = "Bạn là công cụ số hóa OCR. Hãy xuất mã HTML hiển thị toàn bộ nội dung tài liệu người dùng đã tải lên. Tuyệt đối không viết mã CSS.";
+      const fallbackPrompt = `Hãy đọc tệp '${fileData.name}' và chuyển đổi tất cả nội dung văn bản, bảng biểu, bài tập sang mã HTML <body>. Khôi phục đầy đủ cấu trúc văn bản mà không kèm mã CSS.`;
+
+      try {
+        const fallbackRes = await runCall([...parts, { text: fallbackPrompt }], fallbackSystemInstruction);
+        const fbCandidate = fallbackRes.candidates?.[0];
+        
+        try {
+          text = fallbackRes.text || "";
+        } catch (e) {
+          text = "";
+        }
+
+        if (!text && fbCandidate?.content?.parts) {
+          text = fbCandidate.content.parts.map((p: any) => p.text || "").join("");
+        }
+        cleanHtml = stripCssAndMetadata(text);
+      } catch (fbErr) {
+        console.error("Fallback call error:", fbErr);
+      }
+    }
+
+    if (!cleanHtml) {
+      if (finishReason === 'RECITATION') {
+        throw new Error("AI nhận diện tài liệu này thuộc văn bản xuất bản tiêu chuẩn (Trạng thái: RECITATION). Vui lòng thử chụp ảnh hoặc số hóa từng trang lẻ.");
+      }
+      throw new Error(`AI không thể trích xuất nội dung từ tệp này (Trạng thái: ${finishReason || 'Rỗng'}). Vui lòng thử lại hoặc kiểm tra định dạng tệp.`);
+    }
 
     // LaTeX Post-processing
     if (mathFormat === 'latex') {
@@ -194,10 +272,30 @@ export const convertDocument = async (
             cleanHtml = cleanHtml.replace(regex, imgTag);
         });
     }
+
+    if (ignorePageNumbers) {
+      // Post-processing to strip out remaining standalone page numbers like <p>Trang 1</p>, <p>Page 2/10</p>, <p>- 3 -</p>
+      cleanHtml = cleanHtml.replace(/<(p|div)[^>]*>\s*(?:trang|page|p\.)?\s*[-–—―]?\s*\d+\s*(?:[\/\:]\s*\d+)?\s*[-–—―]?\s*<\/\1>/gi, '');
+    }
     
     return cleanHtml;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini Error:", error);
-    throw new Error("Lỗi khi kết nối với AI. Vui lòng thử lại.");
+    const rawMessage = error?.message || "";
+
+    if (rawMessage.includes("429") || rawMessage.includes("RESOURCE_EXHAUSTED") || rawMessage.includes("quota")) {
+      throw new Error("Lỗi giới hạn tần suất: Hệ thống AI đang quá tải, vui lòng thử lại sau giây lát.");
+    }
+    if (rawMessage.includes("API_KEY") || rawMessage.includes("UNAUTHENTICATED")) {
+      throw new Error("Lỗi xác thực: Khóa AI API chưa được cấu hình hoặc không hợp lệ.");
+    }
+    if (rawMessage.includes("SAFETY") || rawMessage.includes("BLOCKED")) {
+      throw new Error("Lỗi nội dung: Tệp bị chặn do vi phạm chính sách an toàn của AI.");
+    }
+    if (rawMessage.includes("MAX_TOKENS") || rawMessage.includes("too large")) {
+      throw new Error("Tệp quá nặng: Dung lượng tệp quá lớn so with giới hạn xử lý của AI.");
+    }
+
+    throw new Error(rawMessage || "Lỗi khi kết nối với AI. Vui lòng thử lại.");
   }
 };
